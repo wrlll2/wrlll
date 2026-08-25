@@ -3,7 +3,7 @@ name: Daily Push Notification
 on:
   schedule:
     # UTC 时间 00:00 对应北京时间 08:00
-    - cron: '0 0 * * *'
+    - cron: '0 22 * * *'
   workflow_dispatch: # 允许在 GitHub 网页手动点击触发
 
 jobs:
