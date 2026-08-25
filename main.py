@@ -43,7 +43,7 @@ def get_btc_price() -> dict:
         change_24h = btc_info.get("usd_24h_change")
 
         if price is None:
-            raise ValueError(f"返回数据中未找到比特币价格")
+            raise ValueError("返回数据中未找到比特币价格")
 
         return {"price": price, "change_24h": change_24h}
     except Exception as e:
@@ -52,7 +52,34 @@ def get_btc_price() -> dict:
 
 
 # ==========================================
-# 2. 获取日本下关天气与 12 小时降雨预警
+# 2. 获取外汇汇率 (USD/CNY & 100 JPY/CNY)
+# ==========================================
+def get_exchange_rates() -> dict:
+    """调用 open.er-api.com 获取 1 美元兑人民币 以及 100 日元兑人民币汇率。"""
+    url = "https://open.er-api.com/v6/latest/USD"
+    try:
+        response = requests.get(url, headers=DEFAULT_HEADERS, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        rates = data.get("rates", {})
+        usd_cny = rates.get("CNY")
+        usd_jpy = rates.get("JPY")
+
+        jpy100_cny = None
+        if usd_cny and usd_jpy:
+            jpy100_cny = (usd_cny / usd_jpy) * 100
+
+        return {
+            "usd_cny": usd_cny,
+            "jpy100_cny": jpy100_cny,
+        }
+    except Exception as e:
+        print(f"[Warning] 获取外汇汇率失败: {e}", file=sys.stderr)
+        return {"usd_cny": None, "jpy100_cny": None}
+
+
+# ==========================================
+# 3. 获取日本下关天气、降雨预警与日出日落
 # ==========================================
 WMO_WEATHER_CODES = {
     0: ("晴朗", "☀️"),
@@ -88,13 +115,13 @@ RAIN_CODES = {51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99}
 
 
 def get_shimonoseki_weather() -> dict:
-    """调用 Open-Meteo API 查询日本下关未来 12 小时降水概率与天气。"""
+    """调用 Open-Meteo API 查询日本下关未来 12 小时降水概率、日出日落与天气情况。"""
     lat, lon, tz = 33.9578, 130.9415, "Asia/Tokyo"
     url = (
         f"https://api.open-meteo.com/v1/forecast"
         f"?latitude={lat}&longitude={lon}"
         f"&hourly=precipitation_probability,weather_code,temperature_2m"
-        f"&daily=weather_code,temperature_2m_max,temperature_2m_min"
+        f"&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset"
         f"&timezone={tz}&forecast_days=2"
     )
     try:
@@ -111,6 +138,12 @@ def get_shimonoseki_weather() -> dict:
         daily = data.get("daily", {})
         max_temp = daily.get("temperature_2m_max", [None])[0]
         min_temp = daily.get("temperature_2m_min", [None])[0]
+        raw_sunrise = daily.get("sunrise", [None])[0]
+        raw_sunset = daily.get("sunset", [None])[0]
+
+        # 格式化日出日落时间 (提取 HH:MM)
+        sunrise_str = raw_sunrise.split("T")[1] if raw_sunrise and "T" in raw_sunrise else "--:--"
+        sunset_str = raw_sunset.split("T")[1] if raw_sunset and "T" in raw_sunset else "--:--"
 
         now_hour = datetime.datetime.now().strftime("%Y-%m-%dT%H:00")
         start_idx = 0
@@ -146,6 +179,8 @@ def get_shimonoseki_weather() -> dict:
             "emoji": cond_emoji,
             "current_temp": f"{current_temp:.1f}°C",
             "temp_range": temp_range_str,
+            "sunrise": sunrise_str,
+            "sunset": sunset_str,
             "max_precip_prob": max_prob,
             "rain_warning": has_rain,
             "umbrella_tip": umbrella_tip,
@@ -157,6 +192,8 @@ def get_shimonoseki_weather() -> dict:
             "emoji": "⛅",
             "current_temp": "--°C",
             "temp_range": "--°C",
+            "sunrise": "--:--",
+            "sunset": "--:--",
             "max_precip_prob": 0,
             "rain_warning": False,
             "umbrella_tip": "🌤️ 出门请留意天气变化。",
@@ -164,7 +201,7 @@ def get_shimonoseki_weather() -> dict:
 
 
 # ==========================================
-# 3. 聚合全网热点 TOP 10 (微博、抖音、X、知乎)
+# 4. 聚合全网热点 TOP 10 (微博、抖音、X、知乎)
 # ==========================================
 def fetch_weibo_hot() -> List[str]:
     """抓取微博实时热搜。"""
@@ -275,10 +312,15 @@ def get_top_10_hot_topics() -> List[Dict[str, str]]:
 
 
 # ==========================================
-# 4. Bark 推送消息格式化与发送
+# 5. Bark 推送消息格式化与发送
 # ==========================================
-def send_combined_bark_push(btc: dict, weather: dict, hot_topics: List[Dict[str, str]]) -> bool:
-    """将 BTC 行情、天气降雨预警和全网热点组合为一条优雅通知并推送到 Bark。"""
+def send_combined_bark_push(
+    btc: dict,
+    rates: dict,
+    weather: dict,
+    hot_topics: List[Dict[str, str]],
+) -> bool:
+    """将 BTC 价格、外汇汇率、天气日出日落/降雨预警和全网热点组合为一条优雅通知并推送到 Bark。"""
     device_key = os.environ.get("BARK_KEY") or BARK_DEVICE_KEY
     if not device_key:
         print(
@@ -293,7 +335,7 @@ def send_combined_bark_push(btc: dict, weather: dict, hot_topics: List[Dict[str,
     weather_cond = weather.get("condition", "晴")
 
     # 1. 动态标题
-    btc_price_str = f"${btc['price']:,.0f}" if btc.get("price") else "行情已更新"
+    btc_price_str = f"${btc['price']:,.0f}" if btc.get("price") else "行情更新"
     if is_rain:
         title = f"🌧️ 降雨预警·每日早报 | 日本下关 · BTC {btc_price_str}"
         icon_url = "https://cdn-icons-png.flaticon.com/512/1163/1163624.png"
@@ -304,8 +346,8 @@ def send_combined_bark_push(btc: dict, weather: dict, hot_topics: List[Dict[str,
     # 2. 组装正文
     body_lines = []
 
-    # BTC 板块
-    body_lines.append("【🪙 比特币 (BTC) 实时行情】")
+    # 行情与外汇板块
+    body_lines.append("【🪙 资产行情 & 外汇汇率】")
     if btc.get("price") is not None:
         price_val = btc["price"]
         change_val = btc.get("change_24h")
@@ -314,14 +356,20 @@ def send_combined_bark_push(btc: dict, weather: dict, hot_topics: List[Dict[str,
             sign = "+" if change_val >= 0 else ""
             emoji = "📈" if change_val >= 0 else "📉"
             change_str = f" (24h: {emoji} {sign}{change_val:.2f}%)"
-        body_lines.append(f"• 最新价格: ${price_val:,.2f}{change_str}")
+        body_lines.append(f"• 比特币 (BTC): ${price_val:,.2f}{change_str}")
     else:
-        body_lines.append("• 价格信息暂时获取失败")
+        body_lines.append("• 比特币 (BTC): 暂未获取到行情")
+
+    if rates.get("usd_cny") is not None:
+        body_lines.append(f"• 1 美元 (USD): ¥{rates['usd_cny']:.4f} CNY")
+    if rates.get("jpy100_cny") is not None:
+        body_lines.append(f"• 100 日元 (JPY): ¥{rates['jpy100_cny']:.4f} CNY")
     body_lines.append("")
 
-    # 天气预警板块
+    # 天气与日升日落预警板块
     body_lines.append("【📍 日本·下关天气 & 降雨预警】")
     body_lines.append(f"• 天气状况: {weather_cond} {cond_emoji} (气温 {weather.get('temp_range', '--')})")
+    body_lines.append(f"• 日月运行: 🌅 日出 {weather.get('sunrise', '--:--')} | 🌇 日落 {weather.get('sunset', '--:--')}")
     body_lines.append(f"• 降水概率: 未来12小时最高 {weather.get('max_precip_prob', 0)}%")
     body_lines.append(f"• 出行提醒: {weather.get('umbrella_tip', '')}")
     body_lines.append("")
@@ -363,37 +411,43 @@ def send_combined_bark_push(btc: dict, weather: dict, hot_topics: List[Dict[str,
 
 
 # ==========================================
-# 5. 主程序入口
+# 6. 主程序入口
 # ==========================================
 def main():
     print("=" * 55)
-    print("🌅 开始获取 BTC 价格、日本下关天气预警与全网热点...")
+    print("🌅 开始获取 BTC 价格、外汇汇率、天气预警与全网热点...")
     print("=" * 55)
 
     # 1. BTC 价格
     print("1️⃣ 正在获取比特币（BTC）最新价格...")
     btc_data = get_btc_price()
     if btc_data.get("price"):
-        print(f"   BTC 当前价格: ${btc_data['price']:,.2f} (24h: {btc_data.get('change_24h', 0):+.2f}%)")
+        print(f"   BTC 价格: ${btc_data['price']:,.2f} (24h: {btc_data.get('change_24h', 0):+.2f}%)")
 
-    # 2. 天气预警
-    print("2️⃣ 正在获取日本下关天气与降水概率...")
+    # 2. 外汇汇率
+    print("2️⃣ 正在获取外汇汇率 (USD/CNY, JPY/CNY)...")
+    rates_data = get_exchange_rates()
+    if rates_data.get("usd_cny"):
+        print(f"   1 USD = {rates_data['usd_cny']:.4f} CNY | 100 JPY = {rates_data['jpy100_cny']:.4f} CNY")
+
+    # 3. 天气预警与日出日落
+    print("3️⃣ 正在获取日本下关天气、日出日落与降水概率...")
     weather_data = get_shimonoseki_weather()
-    print(f"   下关天气: {weather_data['condition']} {weather_data['emoji']} | 降雨概率: {weather_data['max_precip_prob']}%")
-    print(f"   提醒: {weather_data['umbrella_tip']}")
+    print(f"   下关天气: {weather_data['condition']} {weather_data['emoji']} | 🌅 {weather_data['sunrise']} 🌇 {weather_data['sunset']}")
+    print(f"   降雨概率: {weather_data['max_precip_prob']}% | {weather_data['umbrella_tip']}")
 
-    # 3. 全网热点
-    print("3️⃣ 正在抓取微博、抖音、Twitter/X 热点...")
+    # 4. 全网热点
+    print("4️⃣ 正在抓取微博、抖音、Twitter/X 热点...")
     hot_topics = get_top_10_hot_topics()
     print(f"   已获取 {len(hot_topics)} 条核心热点。")
 
-    # 4. 合并推送
+    # 5. 合并推送
     print("-" * 55)
     print("📲 正在发送聚合早报到手机 Bark...")
-    success = send_combined_bark_push(btc_data, weather_data, hot_topics)
+    success = send_combined_bark_push(btc_data, rates_data, weather_data, hot_topics)
 
     if success:
-        print("🎉 恭喜！包含 BTC 价格、天气降雨预警和热榜的早报已成功推送到手机！")
+        print("🎉 恭喜！聚合早报已成功推送到手机！")
     else:
         print("❌ 推送未成功，请检查 BARK_KEY 环境变量配置。")
     print("=" * 55)
