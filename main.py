@@ -201,10 +201,10 @@ def get_shimonoseki_weather() -> dict:
 
 
 # ==========================================
-# 4. 热搜抓取：微博(3条)、抖音(3条+链接)、Twitter(3条+链接)、知乎(1条)
+# 4. 热搜抓取：微博(10条)、抖音(10条无链接)、Twitter(5条+链接)、知乎(5条无链接)
 # ==========================================
-def fetch_weibo_hot(limit: int = 3) -> List[Dict[str, str]]:
-    """抓取微博热搜前 N 条（标题）。"""
+def fetch_weibo_hot(limit: int = 10) -> List[str]:
+    """抓取微博热搜前 N 条（纯标题）。"""
     url = "https://weibo.com/ajax/side/hotSearch"
     headers = {**DEFAULT_HEADERS, "Referer": "https://weibo.com/"}
     topics = []
@@ -214,8 +214,8 @@ def fetch_weibo_hot(limit: int = 3) -> List[Dict[str, str]]:
             for item in r.json().get("data", {}).get("realtime", []):
                 if not item.get("is_ad") and not item.get("is_star") and item.get("word"):
                     title = item["word"].strip()
-                    if title and title not in [t["title"] for t in topics]:
-                        topics.append({"source": "微博", "title": title, "url": None})
+                    if title and title not in topics:
+                        topics.append(title)
                 if len(topics) >= limit:
                     break
     except Exception as e:
@@ -223,8 +223,8 @@ def fetch_weibo_hot(limit: int = 3) -> List[Dict[str, str]]:
     return topics
 
 
-def fetch_douyin_hot(limit: int = 3) -> List[Dict[str, str]]:
-    """抓取抖音热搜前 N 条（标题 + 跳转链接）。"""
+def fetch_douyin_hot(limit: int = 10) -> List[str]:
+    """抓取抖音热搜前 N 条（纯标题，不带链接）。"""
     urls = [
         "https://www.iesdouyin.com/web/api/v2/hotsearch/billboard/word/",
         "https://www.douyin.com/aweme/v1/web/hot/search/list/",
@@ -237,9 +237,8 @@ def fetch_douyin_hot(limit: int = 3) -> List[Dict[str, str]]:
                 word_list = r.json().get("word_list") or r.json().get("data", {}).get("word_list", [])
                 for item in word_list:
                     word = item.get("word", "").strip()
-                    if word and word not in [t["title"] for t in topics]:
-                        jump_url = f"https://www.douyin.com/search/{urllib.parse.quote(word)}"
-                        topics.append({"source": "抖音", "title": word, "url": jump_url})
+                    if word and word not in topics:
+                        topics.append(word)
                     if len(topics) >= limit:
                         break
                 if topics:
@@ -249,8 +248,8 @@ def fetch_douyin_hot(limit: int = 3) -> List[Dict[str, str]]:
     return topics
 
 
-def fetch_twitter_hot(limit: int = 3) -> List[Dict[str, str]]:
-    """抓取 Twitter (X) 热搜前 N 条（标题 + 跳转链接）。"""
+def fetch_twitter_hot(limit: int = 5) -> List[Dict[str, str]]:
+    """抓取 Twitter (X) 热搜前 N 条（标题 + 标准 HTTPS 跳转链接）。"""
     url = "https://getdaytrends.com/japan/"
     topics = []
     try:
@@ -260,7 +259,7 @@ def fetch_twitter_hot(limit: int = 3) -> List[Dict[str, str]]:
                 decoded = urllib.parse.unquote(m).strip()
                 if decoded and decoded not in [t["title"] for t in topics]:
                     jump_url = f"https://x.com/search?q={urllib.parse.quote(decoded)}"
-                    topics.append({"source": "X/Twitter", "title": decoded, "url": jump_url})
+                    topics.append({"title": decoded, "url": jump_url})
                 if len(topics) >= limit:
                     break
     except Exception as e:
@@ -268,8 +267,8 @@ def fetch_twitter_hot(limit: int = 3) -> List[Dict[str, str]]:
     return topics
 
 
-def fetch_zhihu_hot(limit: int = 1) -> List[Dict[str, str]]:
-    """抓取知乎热搜前 N 条（标题）。"""
+def fetch_zhihu_hot(limit: int = 5) -> List[str]:
+    """抓取知乎热搜前 N 条（纯标题，不带链接）。"""
     url = "https://api.zhihu.com/topstory/hot-lists/total"
     topics = []
     try:
@@ -279,8 +278,8 @@ def fetch_zhihu_hot(limit: int = 1) -> List[Dict[str, str]]:
                 t = item.get("target", {}).get("title")
                 if t:
                     clean_title = t.strip()
-                    if clean_title and clean_title not in [x["title"] for x in topics]:
-                        topics.append({"source": "知乎", "title": clean_title, "url": None})
+                    if clean_title and clean_title not in topics:
+                        topics.append(clean_title)
                 if len(topics) >= limit:
                     break
     except Exception as e:
@@ -288,25 +287,14 @@ def fetch_zhihu_hot(limit: int = 1) -> List[Dict[str, str]]:
     return topics
 
 
-def get_curated_hot_topics() -> List[Dict[str, str]]:
-    """
-    按用户需求精准组合：
-    - 微博热搜：前 3 条（标题）
-    - 抖音热搜：前 3 条（标题 + 链接）
-    - Twitter/X 热搜：前 3 条（标题 + 链接）
-    - 知乎热搜：前 1 条（标题）
-    """
-    wb = fetch_weibo_hot(limit=3)
-    dy = fetch_douyin_hot(limit=3)
-    tw = fetch_twitter_hot(limit=3)
-    zh = fetch_zhihu_hot(limit=1)
-
-    result = []
-    result.extend(wb)
-    result.extend(dy)
-    result.extend(tw)
-    result.extend(zh)
-    return result
+def get_all_hot_topics() -> dict:
+    """获取各平台指定数量的热搜榜单。"""
+    return {
+        "weibo": fetch_weibo_hot(limit=10),
+        "douyin": fetch_douyin_hot(limit=10),
+        "twitter": fetch_twitter_hot(limit=5),
+        "zhihu": fetch_zhihu_hot(limit=5),
+    }
 
 
 # ==========================================
@@ -316,9 +304,9 @@ def send_combined_bark_push(
     btc: dict,
     rates: dict,
     weather: dict,
-    hot_topics: List[Dict[str, str]],
+    hot_data: dict,
 ) -> bool:
-    """将 BTC 价格、外汇汇率、天气日出日落/降雨预警和带链接的热搜列表组合推送到 Bark。"""
+    """将 BTC 价格、外汇汇率、天气日出日落/降雨预警以及多平台热搜列表组合推送到 Bark。"""
     device_key = os.environ.get("BARK_KEY") or BARK_DEVICE_KEY
     if not device_key:
         print(
@@ -372,18 +360,40 @@ def send_combined_bark_push(
     body_lines.append(f"• 出行提醒: {weather.get('umbrella_tip', '')}")
     body_lines.append("")
 
-    # 全网热点板块（抖音和 Twitter 附带跳转链接）
-    body_lines.append("【🔥 今日精选热搜 TOP 10】")
-    for idx, item in enumerate(hot_topics, 1):
-        source = item.get("source", "热点")
-        topic_title = item.get("title", "")
-        url = item.get("url")
+    # 微博热搜前 10
+    weibo_list = hot_data.get("weibo", [])
+    if weibo_list:
+        body_lines.append("【🔥 微博热搜 TOP 10】")
+        for idx, title_text in enumerate(weibo_list, 1):
+            body_lines.append(f"{idx}. {title_text}")
+        body_lines.append("")
 
-        body_lines.append(f"{idx}. [{source}] {topic_title}")
-        if url:
-            body_lines.append(f"   🔗 {url}")
+    # 抖音热搜前 10（无链接）
+    douyin_list = hot_data.get("douyin", [])
+    if douyin_list:
+        body_lines.append("【🎵 抖音热点 TOP 10】")
+        for idx, title_text in enumerate(douyin_list, 1):
+            body_lines.append(f"{idx}. {title_text}")
+        body_lines.append("")
 
-    body_lines.append("")
+    # Twitter (X) 热搜前 5（附带链接）
+    twitter_list = hot_data.get("twitter", [])
+    if twitter_list:
+        body_lines.append("【🐦 Twitter/X 趋势 TOP 5】")
+        for idx, item in enumerate(twitter_list, 1):
+            body_lines.append(f"{idx}. {item['title']}")
+            if item.get("url"):
+                body_lines.append(f"🔗 {item['url']}")
+        body_lines.append("")
+
+    # 知乎热搜前 5（无链接）
+    zhihu_list = hot_data.get("zhihu", [])
+    if zhihu_list:
+        body_lines.append("【💡 知乎热榜 TOP 5】")
+        for idx, title_text in enumerate(zhihu_list, 1):
+            body_lines.append(f"{idx}. {title_text}")
+        body_lines.append("")
+
     body_lines.append(f"⏰ 发送时间: {now_str}")
 
     body_text = "\n".join(body_lines)
@@ -419,7 +429,7 @@ def send_combined_bark_push(
 # ==========================================
 def main():
     print("=" * 55)
-    print("🌅 开始获取 BTC 价格、外汇汇率、天气预警与精选热搜...")
+    print("🌅 开始获取 BTC 价格、外汇汇率、天气预警与各平台热搜...")
     print("=" * 55)
 
     # 1. BTC 价格
@@ -440,18 +450,18 @@ def main():
     print(f"   下关天气: {weather_data['condition']} {weather_data['emoji']} | 🌅 {weather_data['sunrise']} 🌇 {weather_data['sunset']}")
     print(f"   降雨概率: {weather_data['max_precip_prob']}% | {weather_data['umbrella_tip']}")
 
-    # 4. 精选热搜（微博3、抖音3+链接、Twitter3+链接、知乎1）
-    print("4️⃣ 正在抓取精选热搜（微博3条、抖音3条+链接、Twitter3条+链接、知乎1条）...")
-    hot_topics = get_curated_hot_topics()
-    print(f"   已获取 {len(hot_topics)} 条精选热搜：")
-    for i, t in enumerate(hot_topics, 1):
-        link_str = f" -> {t['url']}" if t.get('url') else ""
-        print(f"   {i}. [{t['source']}] {t['title']}{link_str}")
+    # 4. 热搜抓取
+    print("4️⃣ 正在抓取多平台热搜（微博10条、抖音10条、Twitter5条+链接、知乎5条）...")
+    hot_data = get_all_hot_topics()
+    print(f"   - 微博热搜: {len(hot_data['weibo'])} 条")
+    print(f"   - 抖音热搜: {len(hot_data['douyin'])} 条 (无链接)")
+    print(f"   - Twitter/X 趋势: {len(hot_data['twitter'])} 条 (附带链接)")
+    print(f"   - 知乎热榜: {len(hot_data['zhihu'])} 条 (无链接)")
 
     # 5. 合并推送
     print("-" * 55)
     print("📲 正在发送聚合早报到手机 Bark...")
-    success = send_combined_bark_push(btc_data, rates_data, weather_data, hot_topics)
+    success = send_combined_bark_push(btc_data, rates_data, weather_data, hot_data)
 
     if success:
         print("🎉 恭喜！聚合早报已成功推送到手机！")
